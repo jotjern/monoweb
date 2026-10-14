@@ -15,7 +15,7 @@ resource "terraform_data" "bootstrap" {
     timeout             = "10m"
   }
   provisioner "remote-exec" {
-    inline = ["mkdir -p /tmp/monoweb-preview-bootstrap/recovery", "chmod 700 /tmp/monoweb-preview-bootstrap /tmp/monoweb-preview-bootstrap/recovery"]
+    inline = ["set -eu", "mkdir -p /tmp/monoweb-preview-bootstrap/recovery", "chmod 700 /tmp/monoweb-preview-bootstrap /tmp/monoweb-preview-bootstrap/recovery"]
   }
   provisioner "file" {
     source      = "${var.secrets_directory}/"
@@ -46,7 +46,7 @@ resource "terraform_data" "bootstrap" {
     destination = "/tmp/monoweb-preview-bootstrap/reconcile.timer"
   }
   provisioner "remote-exec" {
-    inline = ["sudo python3 /tmp/monoweb-preview-bootstrap/bootstrap.py /tmp/monoweb-preview-bootstrap ${openstack_blockstorage_volume_v3.data.id}"]
+    inline = ["set -eu", "sudo python3 /tmp/monoweb-preview-bootstrap/bootstrap.py /tmp/monoweb-preview-bootstrap ${openstack_blockstorage_volume_v3.data.id}"]
   }
 }
 
@@ -61,6 +61,9 @@ resource "terraform_data" "ingress" {
     user        = "ubuntu"
     private_key = file(var.ingress_private_key_path)
   }
+  provisioner "remote-exec" {
+    inline = ["set -eu", "mkdir -p /tmp/monoweb-coolify-ingress"]
+  }
   provisioner "file" {
     content = yamlencode({ network = { version = 2, ethernets = { ens7 = {
       match = { macaddress = openstack_networking_port_v2.ingress.mac_address }
@@ -70,12 +73,13 @@ resource "terraform_data" "ingress" {
   }
   provisioner "file" {
     source      = "${path.module}/../ingress/"
-    destination = "/tmp/monoweb-preview-ingress"
+    destination = "/tmp/monoweb-coolify-ingress"
   }
   provisioner "remote-exec" {
     inline = [
+      "set -eu",
       "sudo install -m 600 /tmp/monoweb-preview-netplan.yaml /etc/netplan/90-monoweb-preview.yaml",
-      "sudo install -m 644 /tmp/monoweb-preview-ingress/* /etc/systemd/system/",
+      "sudo install -m 644 /tmp/monoweb-coolify-ingress/* /etc/systemd/system/",
       "sudo netplan generate && sudo networkctl reload && sudo networkctl reconfigure ens7",
       "sudo systemctl daemon-reload && sudo systemctl enable --now monoweb-preview-http.socket monoweb-preview-https.socket"
     ]

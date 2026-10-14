@@ -1,11 +1,26 @@
 variable "ssh_public_key" { type = string }
 variable "ssh_private_key_path" { type = string }
-variable "ingress_host" { default = "129.241.100.225" }
-variable "ingress_server_id" { default = "638e1c4a-4d33-4f64-a3f3-f28061d8cacf" }
+variable "ingress_host" {
+  type    = string
+  default = "129.241.100.225"
+}
+variable "ingress_server_id" {
+  type    = string
+  default = "638e1c4a-4d33-4f64-a3f3-f28061d8cacf"
+}
 variable "ingress_private_key_path" { type = string }
-variable "external_network_id" { default = "9acc59cd-6b68-4075-8b28-5abeaa1379c5" }
-variable "image_id" { default = "9e481427-d702-460b-a9fd-c3053f216518" }
-variable "flavor_id" { default = "aef91d31-ffa8-4b14-9c14-a38ebb757358" }
+variable "external_network_id" {
+  type    = string
+  default = "9acc59cd-6b68-4075-8b28-5abeaa1379c5"
+}
+variable "image_id" {
+  type    = string
+  default = "9e481427-d702-460b-a9fd-c3053f216518"
+}
+variable "flavor_id" {
+  type    = string
+  default = "aef91d31-ffa8-4b14-9c14-a38ebb757358"
+}
 variable "secrets_directory" {
   description = "Private off-server recovery copy; later replace the config source with Doppler."
   type        = string
@@ -61,7 +76,7 @@ resource "openstack_compute_instance_v2" "preview" {
     uuid        = openstack_networking_network_v2.preview.id
     fixed_ip_v4 = "192.168.73.66"
   }
-  user_data = "#cloud-config\npackage_update: true\npackages: [curl, git, python3, jq]\n"
+  user_data = "#cloud-config\npackage_update: true\npackages: [curl, git, python3, jq, docker.io, docker-compose-v2]\n"
   lifecycle { ignore_changes = [user_data] }
   depends_on = [openstack_networking_router_interface_v2.preview]
 }

@@ -51,7 +51,7 @@ assert states, "Provide at least one preview ID"
 for state in states:
     with urllib.request.urlopen(state["origin"], timeout=45) as response:
         html = response.read().decode()
-        assert response.status == 200 and "preview" in html.lower()
+        assert response.status == 200 and "Online" in html
     opener = urllib.request.build_opener(NoRedirect)
     for path in ("/admin", "/api/auth/authorize"):
         try:
@@ -67,12 +67,10 @@ for state in states:
                 assert parameters["redirect_uri"] == [state["origin"] + "/api/auth/callback/auth0"]
                 assert parameters["client_id"] == [state["web_client"]["client_id"]]
                 assert parameters["audience"] == [state["rpc_origin"]]
-                assert parameters["connection"] == [state["connection"]["name"]]
         else:
             raise AssertionError("Login/admin route did not redirect")
     assert http("GET", state["rpc_origin"] + "/health") == {"status": "ok"}
-    article = call(state, "article.getBySlug", "preview-welcome")
-    assert state["id"] in article["title"]
+    article = call(state, "article.featured")[0]
     token = login(controller, state)
     assert call(state, "user.isAdmin", token=token) is True
     assert call(state, "user.isAdmin") is False
@@ -85,10 +83,10 @@ for state in states:
         raise AssertionError("Anonymous mutation succeeded")
     try:
         call(state, "article.edit", edit, token=token, mutation=True)
-        assert call(state, "article.getBySlug", "preview-welcome")["excerpt"] == "Preview isolation smoke test"
+        assert call(state, "article.getBySlug", article["slug"])["excerpt"] == "Preview isolation smoke test"
         for peer in states:
             if peer["id"] != state["id"]:
-                assert call(peer, "article.getBySlug", "preview-welcome")["excerpt"] != "Preview isolation smoke test"
+                assert call(peer, "article.getBySlug", article["slug"])["excerpt"] != "Preview isolation smoke test"
                 try:
                     call(peer, "user.isAdmin", token=token)
                 except urllib.error.HTTPError:

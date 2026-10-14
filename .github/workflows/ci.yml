@@ -48,6 +48,10 @@ jobs:
         name: Install TFLint
         with:
           tflint_version: v0.64.0
+      - name: Validate preview integration
+        run: |
+          python3 -m unittest discover -s infra/preview -p 'test_*.py'
+          sh -n infra/preview/build.sh
       - run: pnpm tflint-check
         name: Terraform lint
       - run: pnpm type-check

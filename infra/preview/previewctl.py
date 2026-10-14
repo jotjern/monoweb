@@ -229,7 +229,7 @@ class Controller:
         values = {}
         for application in ('web', 'rpc'):
             command = [part.replace('{application}', application) for part in self.config['environment_command']]
-            source = json.loads(run(command, capture=True))
+            source = json.loads(run(command, capture=True, env={**SAFE_ENV, **self.config.get('environment_source_credentials', {})}))
             for key, value in source.items():
                 if not re.fullmatch(r'[A-Z][A-Z0-9_]*', key) or not isinstance(value, str):
                     raise ValueError('Expected a JSON object of environment names and string values')
@@ -243,12 +243,13 @@ class Controller:
     def deploy(self, preview, sha, branch=None):
         if not SHA.fullmatch(sha) or self.expected_commit(preview) != sha:
             raise ValueError('Refusing mismatched source commit')
+        if branch is None and preview.startswith('pr-'):
+            branch = http('GET', f'https://api.github.com/repos/{self.config["repository"]}/pulls/{preview[3:]}')['head']['ref']
         state = self.provision(preview)
         values = self.configuration(state)
         domains = [{'name': 'web', 'domain': state['origin'] + ':3000'}, {'name': 'rpc', 'domain': state['rpc_origin'] + ':4444'}]
-        import base64
-        script = base64.b64encode((self.directory / 'build.sh').read_bytes()).decode()
-        build_command = f'printf %s {script} | base64 -d > /tmp/preview-build.sh && sh /tmp/preview-build.sh'
+        # Run the independently installed build hook in a helper sharing Coolify's checkout.
+        build_command = "sh -c 'docker run --rm --volumes-from \"$HOSTNAME\" --env-file /artifacts/build-time.env -v /opt/monoweb-previews/controller:/control:ro -w \"$PWD\" coollabsio/coolify-helper:1.0.17 sh /control/build.sh'"
         definition = {
             'name': 'monoweb-' + preview, 'git_repository': 'https://github.com/' + self.config['repository'],
             'git_branch': branch or 'main', 'git_commit_sha': sha, 'build_pack': 'dockercompose',
@@ -264,14 +265,15 @@ class Controller:
             private_json(self.state_path(preview), state)
         else:
             # The update endpoint uses the saved Compose definition supplied at creation.
-            update = {k:v for k,v in definition.items() if k != 'docker_compose_raw'}
+            update = {k:v for k,v in definition.items() if k not in ('docker_compose_raw', 'docker_compose_domains')}
+            update['git_repository'] = self.config['repository']
             self.coolify('PATCH', '/applications/' + state['coolify_uuid'], update)
         entries = [{'key': k, 'value': v, 'is_runtime': True, 'is_buildtime': True, 'is_literal': True} for k,v in values.items()]
         entries.extend({'key': k, 'value': v, 'is_runtime': False, 'is_buildtime': True, 'is_literal': True} for k,v in {
             'MIGRATION_DATABASE_URL': state['db_migrator']['database_url'], 'PREVIEW_ADMIN_ID': state['admin']['user_id'],
             'PREVIEW_ADMIN_EMAIL': state['admin']['email']}.items())
         self.coolify('PATCH', '/applications/' + state['coolify_uuid'] + '/envs/bulk', {'data': entries})
-        deployment = self.coolify('GET', '/deploy?uuid=' + state['coolify_uuid'] + '&force=true')
+        deployment = self.coolify('POST', '/deploy', {'uuid': state['coolify_uuid'], 'force': True})
         state.update(sha=sha, deployment=deployment, status='queued')
         private_json(self.state_path(preview), state)
         print('Queued in Coolify: ' + state['origin'], flush=True)
