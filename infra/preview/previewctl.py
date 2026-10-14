@@ -225,7 +225,7 @@ class Controller:
         archive.unlink()
         overlay = build / "infra/preview"
         overlay.mkdir(parents=True, exist_ok=True)
-        for name in ("Dockerfile.web", "Dockerfile.rpc", "Dockerfile.tools", "seed.ts"):
+        for name in ("Dockerfile.web", "Dockerfile.rpc", "Dockerfile.tools", "seed.mts"):
             shutil.copyfile(self.directory / name, overlay / name)
         ignore = build / ".dockerignore"
         ignore.write_text(ignore.read_text().replace("\ninfra\n", "\ninfra/*\n!infra/preview/\n") + "\n**/.env*\n.preview-state\n")
@@ -274,7 +274,7 @@ class Controller:
             run(["docker", "run", "--rm", "--env-file", str(migration_file), "-v",
                  f"{build}/packages/db/generated:/app/packages/db/generated", tools,
                  "pnpm", "-F", "@dotkomonline/db", "generate"])
-            run([*args, "pnpm", "-F", "@dotkomonline/db", "exec", "tsx", "/app/infra/preview/seed.ts"])
+            run([*args, "pnpm", "-F", "@dotkomonline/db", "exec", "tsx", "/app/infra/preview/seed.mts"])
         finally:
             migration_file.unlink(missing_ok=True)
         run(["docker", "build", "--progress=plain", "-f", str(self.directory / "Dockerfile.rpc"), "-t", "monoweb-preview-rpc:" + tag, "."], cwd=build)
