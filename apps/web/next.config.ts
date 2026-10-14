@@ -1,7 +1,11 @@
 import { withSentryConfig } from "@sentry/nextjs/config"
 import type { NextConfig } from "next"
+import path from "node:path"
 
 const config: NextConfig = {
+  ...(process.env.PREVIEW_STANDALONE === "1"
+    ? { output: "standalone", outputFileTracingRoot: path.resolve(process.cwd(), "../..") }
+    : {}),
   reactStrictMode: true,
   env: {
     NEXT_PUBLIC_LOGIN_ROUTE: "/api/auth/authorize",

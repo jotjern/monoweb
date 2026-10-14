@@ -1,0 +1,5 @@
+{
+  admin localhost:2019
+}
+
+import /etc/caddy/previews/*.caddy

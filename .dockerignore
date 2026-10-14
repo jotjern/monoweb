@@ -7,9 +7,12 @@
 
 .dockerignore
 .env*
+**/.env*
+.preview-state
 
 node_modules
-infra
+infra/*
+!infra/preview/
 out
 build
 dist

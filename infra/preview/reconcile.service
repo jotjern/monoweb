@@ -1,0 +1,8 @@
+[Unit]
+Description=Remove Monoweb previews for closed PRs
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/monoweb-preview/controller/previewctl.py reconcile
+UMask=0077

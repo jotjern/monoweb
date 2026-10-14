@@ -1,0 +1,12 @@
+{
+  "repository": "jotjern/monoweb",
+  "base_domain": "129.241.100.225.sslip.io",
+  "planetscale_org": "jotjernshaugen",
+  "planetscale_database": "monoweb-preview-test",
+  "planetscale_token_id": "REPLACE",
+  "planetscale_token": "REPLACE",
+  "auth0_domain": "onlineweb-staging.eu.auth0.com",
+  "auth0_client_id": "REPLACE",
+  "auth0_client_secret": "REPLACE",
+  "max_pr_previews": 2
+}

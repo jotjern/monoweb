@@ -1,0 +1,16 @@
+{
+  "services": {
+    "caddy": {
+      "image": "caddy:2@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af",
+      "container_name": "preview-caddy",
+      "restart": "unless-stopped",
+      "ports": ["80:80", "443:443"],
+      "volumes": ["/etc/caddy:/etc/caddy:ro", "caddy-data:/data", "caddy-config:/config"],
+      "networks": ["preview-edge"],
+      "mem_limit": "256m",
+      "logging": {"driver": "json-file", "options": {"max-size": "10m", "max-file": "2"}}
+    }
+  },
+  "volumes": {"caddy-data": {}, "caddy-config": {}},
+  "networks": {"preview-edge": {"external": true}}
+}
