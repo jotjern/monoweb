@@ -1,0 +1,11 @@
+terraform {
+  backend "local" {}
+  required_version = ">= 1.6"
+  required_providers {
+    openstack = {
+      source  = "terraform-provider-openstack/openstack"
+      version = "~> 3.4"
+    }
+  }
+}
+provider "openstack" {}

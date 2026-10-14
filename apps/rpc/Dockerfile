@@ -1,5 +1,5 @@
 FROM node:22-alpine@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b AS base
-FROM base AS installer
+FROM base AS dependencies
 WORKDIR /app
 
 RUN npm install -g pnpm@10.15.1 --ignore-scripts
@@ -9,6 +9,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --ignore-scripts
 
 # Install for production
+FROM dependencies AS installer
 RUN pnpm install --prod --ignore-scripts --config.confirmModulesPurge=false
 
 FROM base AS runner
