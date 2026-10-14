@@ -58,7 +58,7 @@ for state in states:
             opener.open(state["origin"] + path, timeout=45)
         except urllib.error.HTTPError as response:
             assert response.code in (302, 303, 307, 308)
-            target = urllib.parse.urlparse(response.headers["Location"])
+            target = urllib.parse.urlparse(urllib.parse.urljoin(state["origin"], response.headers["Location"]))
             if path == "/admin":
                 assert target.hostname == urllib.parse.urlparse(state["origin"]).hostname
             else:

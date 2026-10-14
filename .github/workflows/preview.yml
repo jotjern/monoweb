@@ -58,6 +58,11 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/preview_key
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           cat > ~/.ssh/config <<EOF
+          Host preview-jump preview-vps
+            ConnectTimeout 20
+            ConnectionAttempts 2
+            KexAlgorithms curve25519-sha256
+            IPQoS none
           Host preview-jump
             HostName $PREVIEW_PUBLIC_HOST
             Port $PREVIEW_SSH_PORT
@@ -66,6 +71,7 @@ jobs:
             IdentityFile ~/.ssh/preview_key
             IdentitiesOnly yes
             StrictHostKeyChecking yes
+            LogLevel VERBOSE
           Host preview-vps
             HostName $PREVIEW_PRIVATE_HOST
             User preview-deploy
