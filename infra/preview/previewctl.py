@@ -249,7 +249,7 @@ class Controller:
         values = self.configuration(state)
         domains = [{'name': 'web', 'domain': state['origin'] + ':3000'}, {'name': 'rpc', 'domain': state['rpc_origin'] + ':4444'}]
         # Run the independently installed build hook in a helper sharing Coolify's checkout.
-        build_command = "sh -c 'docker run --rm --volumes-from \"$HOSTNAME\" --env-file /artifacts/build-time.env -v /opt/monoweb-previews/controller:/control:ro -w \"$PWD\" coollabsio/coolify-helper:1.0.17 sh /control/build.sh'"
+        build_command = "sh -c 'docker run --rm -v /opt/monoweb-previews/controller:/control:ro coollabsio/coolify-helper:1.0.17 cat /control/build.sh > /tmp/preview-build.sh && sh /tmp/preview-build.sh'"
         definition = {
             'name': 'monoweb-' + preview, 'git_repository': 'https://github.com/' + self.config['repository'],
             'git_branch': branch or 'main', 'git_commit_sha': sha, 'build_pack': 'dockercompose',

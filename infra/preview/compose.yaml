@@ -2,7 +2,7 @@
 services:
   web:
     build:
-      context: ../..
+      context: .
       dockerfile: apps/web/Dockerfile
       args:
         AUTH0_CLIENT_ID: ${WEB_AUTH0_CLIENT_ID}
@@ -21,7 +21,7 @@ services:
       start_period: 60s
   rpc:
     build:
-      context: ../..
+      context: .
       dockerfile: apps/rpc/Dockerfile
     environment:
       AUTH0_CLIENT_ID: ${RPC_AUTH0_CLIENT_ID}

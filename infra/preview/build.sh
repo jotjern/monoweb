@@ -25,4 +25,4 @@ trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
 docker start -a "$container"
 mkdir -p packages/db/generated
 docker cp "$container:/app/packages/db/generated/." packages/db/generated/
-docker compose --env-file /artifacts/build-time.env -f infra/preview/compose.yaml build web rpc
+docker compose --project-directory "$PWD" --env-file /artifacts/build-time.env -f infra/preview/compose.yaml build web rpc
