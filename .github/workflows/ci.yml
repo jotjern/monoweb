@@ -125,6 +125,7 @@ jobs:
           package: grades
 
   build-rpc:
+    if: github.repository == 'dotkom/monoweb'
     name: rpc
     runs-on: ubuntu-24.04-arm
     steps:
@@ -141,6 +142,7 @@ jobs:
           git-hash: ${{ github.sha }}
 
   build-web:
+    if: github.repository == 'dotkom/monoweb'
     name: web
     runs-on: ubuntu-24.04-arm
     steps:
@@ -157,6 +159,7 @@ jobs:
           git-hash: ${{ github.sha }}
 
   build-grades-backend:
+    if: github.repository == 'dotkom/monoweb'
     name: grades-backend
     runs-on: ubuntu-24.04-arm
     steps:
@@ -173,6 +176,7 @@ jobs:
           git-hash: ${{ github.sha }}
 
   build-grades-frontend:
+    if: github.repository == 'dotkom/monoweb'
     name: grades-frontend
     runs-on: ubuntu-24.04-arm
     steps:

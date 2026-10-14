@@ -21,7 +21,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  validate:
+    if: github.repository == 'jotjern/monoweb'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - run: python3 -m unittest discover -s infra/preview -p 'test_*.py'
+
   deploy:
+    needs: validate
     if: >-
       github.repository == 'jotjern/monoweb' &&
       (github.event_name != 'pull_request' ||

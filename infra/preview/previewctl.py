@@ -196,7 +196,7 @@ class Controller:
                   "AUTH0_AUDIENCES": state["rpc_origin"]}
         web = {**common, "AUTH0_CLIENT_ID": state["web_client"]["client_id"],
             "AUTH0_CLIENT_SECRET": state["web_client"]["client_secret"], "AUTH_SECRET": state["auth_secret"],
-            "SIGNING_KEY": state["signing_key"], "RPC_HOST": "http://rpc:4444", "NEXT_PUBLIC_ORIGIN": state["origin"],
+            "SIGNING_KEY": state["signing_key"], "RPC_HOST": f"http://{state['id']}-rpc:4444", "NEXT_PUBLIC_ORIGIN": state["origin"],
             "NEXT_PUBLIC_RPC_HOST": state["rpc_origin"], "AWS_CLOUDFRONT_URL": state["origin"],
             "NEXT_PUBLIC_TURNSTILE_SITE_KEY": "1x00000000000000000000AA"}
         rpc = {**common, "AUTH0_CLIENT_ID": state["rpc_client"]["client_id"],
@@ -250,6 +250,14 @@ class Controller:
         manifest = {"services": services, "networks": {"preview-edge": {"external": True}}}
         (stack / "compose.json").write_text(json.dumps(manifest, indent=2))
 
+    def route(self, state):
+        preview = state["id"]
+        route = Path("/etc/caddy/previews") / (preview + ".caddy")
+        route.parent.mkdir(exist_ok=True)
+        route.write_text(f"{state['origin']} {{\n header X-Robots-Tag \"noindex, nofollow\"\n @preview_login path /api/auth/authorize\n rewrite @preview_login /api/auth/authorize?connection={state['connection']['name']}&{{query}}\n reverse_proxy {preview}-web:3000\n}}\n{state['rpc_origin']} {{\n header X-Robots-Tag \"noindex, nofollow\"\n reverse_proxy {preview}-rpc:4444\n}}\n")
+        run(["docker", "exec", "preview-caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"])
+        run(["docker", "exec", "preview-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"])
+
     def deploy(self, preview, sha):
         if not SHA.fullmatch(sha):
             raise ValueError("Deployment requires a full commit SHA")
@@ -287,11 +295,7 @@ class Controller:
         with contextlib.suppress(subprocess.CalledProcessError):
             run(["docker", "network", "create", "preview-edge"], capture=True)
         run(["docker", "compose", "-p", "preview-" + preview, "-f", str(stack / "compose.json"), "up", "-d", "--wait", "--wait-timeout", "180", "--remove-orphans"])
-        route = Path("/etc/caddy/previews") / (preview + ".caddy")
-        route.parent.mkdir(exist_ok=True)
-        route.write_text(f"{state['origin']} {{\n header X-Robots-Tag \"noindex, nofollow\"\n reverse_proxy {preview}-web:3000\n}}\n{state['rpc_origin']} {{\n header X-Robots-Tag \"noindex, nofollow\"\n reverse_proxy {preview}-rpc:4444\n}}\n")
-        run(["docker", "exec", "preview-caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"])
-        run(["docker", "exec", "preview-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"])
+        self.route(state)
         state.update(status="running", sha=sha, deployed_at=int(time.time()))
         private_json(path, state)
         print("Preview ready: " + state["origin"], flush=True)

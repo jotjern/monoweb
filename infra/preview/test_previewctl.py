@@ -19,6 +19,7 @@ class PreviewSecurityTests(unittest.TestCase):
     def test_application_environments_exclude_control_and_migration_credentials(self):
         controller = self.controller()
         state = {
+            "id": "pr-12",
             "web_client": {"client_id": "web-id", "client_secret": "web-secret"},
             "rpc_client": {"client_id": "rpc-id", "client_secret": "rpc-secret"},
             "auth_secret": "session-secret", "signing_key": "signing-secret",
@@ -31,6 +32,7 @@ class PreviewSecurityTests(unittest.TestCase):
             controller.environments(state, root)
             web, rpc = (root / "web.env").read_text(), (root / "rpc.env").read_text()
             self.assertNotIn("runtime-branch-url", web)
+            self.assertIn("RPC_HOST=http://pr-12-rpc:4444", web)
             self.assertIn("runtime-branch-url", rpc)
             for text in (web, rpc):
                 self.assertNotIn("migration-admin-url", text)

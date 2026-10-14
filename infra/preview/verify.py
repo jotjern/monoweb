@@ -67,6 +67,7 @@ for state in states:
                 assert parameters["redirect_uri"] == [state["origin"] + "/api/auth/callback/auth0"]
                 assert parameters["client_id"] == [state["web_client"]["client_id"]]
                 assert parameters["audience"] == [state["rpc_origin"]]
+                assert parameters["connection"] == [state["connection"]["name"]]
         else:
             raise AssertionError("Login/admin route did not redirect")
     assert http("GET", state["rpc_origin"] + "/health") == {"status": "ok"}
