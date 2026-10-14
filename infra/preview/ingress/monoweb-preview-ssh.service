@@ -1,0 +1,12 @@
+[Unit]
+Description=Restricted Monoweb deployment SSH jump endpoint
+After=network-online.target
+
+[Service]
+ExecStartPre=/usr/sbin/sshd -t -f /etc/ssh/sshd_config_monoweb_preview
+ExecStart=/usr/sbin/sshd -D -f /etc/ssh/sshd_config_monoweb_preview
+Restart=on-failure
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

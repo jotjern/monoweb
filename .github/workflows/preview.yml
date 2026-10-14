@@ -43,6 +43,7 @@ jobs:
       EVENT_ACTION: ${{ github.event.action }}
       MANUAL_PREVIEW: ${{ inputs.preview }}
       PREVIEW_PUBLIC_HOST: ${{ vars.PREVIEW_PUBLIC_HOST }}
+      PREVIEW_SSH_PORT: ${{ vars.PREVIEW_SSH_PORT || '2222' }}
       PREVIEW_PRIVATE_HOST: ${{ vars.PREVIEW_PRIVATE_HOST }}
       PREVIEW_BASE_DOMAIN: ${{ vars.PREVIEW_BASE_DOMAIN }}
     steps:
@@ -59,6 +60,8 @@ jobs:
           cat > ~/.ssh/config <<EOF
           Host preview-jump
             HostName $PREVIEW_PUBLIC_HOST
+            Port $PREVIEW_SSH_PORT
+            HostKeyAlias $PREVIEW_PUBLIC_HOST
             User monoweb-preview-jump
             IdentityFile ~/.ssh/preview_key
             IdentitiesOnly yes

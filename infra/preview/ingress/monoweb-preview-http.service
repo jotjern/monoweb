@@ -1,0 +1,13 @@
+[Unit]
+Description=Forward preview HTTP to the isolated VPS
+Requires=monoweb-preview-http.socket
+After=network-online.target
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 192.168.73.66:80
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+MemoryMax=64M

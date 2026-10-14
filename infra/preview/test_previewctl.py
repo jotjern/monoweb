@@ -59,6 +59,17 @@ class PreviewSecurityTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.write_env(Path(directory) / "rpc.env", {"ALLOWED_ORIGINS": "example.com\nUNSAFE_DISABLE_AUTHORIZATION=true"})
 
+    def test_login_isolation_disables_only_this_preview_client(self):
+        controller = self.controller()
+        state = {"web_client": {"client_id": "preview-web"}, "connection": {"id": "own"}}
+        with patch.object(controller, "auth", side_effect=[
+            [{"id": "own"}, {"id": "existing"}],
+            {"clients": [{"client_id": "preview-web"}, {"client_id": "existing-app"}]},
+            None,
+        ]) as auth:
+            controller.isolate_connection(state)
+            self.assertEqual(auth.call_args.args, ("PATCH", "/connections/existing/clients", [{"client_id": "preview-web", "status": False}]))
+
     def test_cleanup_refuses_mismatched_resource_ownership(self):
         controller = self.controller()
         with tempfile.TemporaryDirectory() as directory:

@@ -106,6 +106,18 @@ class Controller:
             raise ValueError("Preview requires an open PR from this repository")
         return pr["head"]["sha"]
 
+    def isolate_connection(self, state):
+        # Auth0 may automatically enable existing tenant connections for new
+        # applications. Remove only this preview client's inherited associations.
+        connections = self.auth("GET", "/connections?fields=id,name&include_fields=true&per_page=100")
+        client_id = state["web_client"]["client_id"]
+        for connection in connections:
+            if connection["id"] == state["connection"]["id"]:
+                continue
+            result = self.auth("GET", "/connections/" + connection["id"] + "/clients")
+            if any(client.get("client_id") == client_id for client in result["clients"]):
+                self.auth("PATCH", "/connections/" + connection["id"] + "/clients", [{"client_id": client_id, "status": False}])
+
     def provision(self, preview):
         path = self.state_path(preview)
         if path.exists():
@@ -179,6 +191,7 @@ class Controller:
             {"client_id": client_id, "status": True}
             for client_id in [state["web_client"]["client_id"], self.config["auth0_client_id"]]
         ])
+        self.isolate_connection(state)
         if "admin" not in state:
             password = secrets.token_urlsafe(24) + "aA1!"
             state["admin"] = self.auth("POST", "/users", {

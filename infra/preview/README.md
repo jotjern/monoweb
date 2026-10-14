@@ -13,7 +13,7 @@ This proof of concept hosts a persistent `main` preview and up to two trusted in
 - PlanetScale: `jotjernshaugen/monoweb-preview-test`. The main preview uses `preview-main`; PR N uses `pr-N`. The default database branch `main` is not used by the application.
 - Auth0 tenant: `onlineweb-staging.eu.auth0.com`. Preview connections and applications are separately named `Monoweb-Preview-*` / `Monoweb preview *`.
 
-The Minecraft host only forwards web TCP connections and acts as a restricted SSH jump host. No application containers or application secrets run there. Its floating IP and game processes remain assigned as before.
+The Minecraft host only forwards web TCP connections and acts as a restricted SSH jump host on port 2222. That dedicated SSH listener permits only the preview jump account and forwarding to the preview VPS; the existing administration SSH listener on port 22 is unchanged. No application containers or application secrets run there. Its floating IP and game processes remain assigned as before. The ingress systemd units and restricted SSH configuration are in `ingress/`.
 
 ## Deployment lifecycle
 
@@ -31,7 +31,7 @@ Builds run on the preview VPS for this proof of concept. Application build proce
 
 Per-preview state lives in root-only `/opt/monoweb-preview/states/ID.json`. It records resource IDs, database credentials, client secrets, the synthetic admin password, and session/signing keys. Application `.env` files are mode 0600 under `/opt/monoweb-preview/stacks/ID/`. Only the backend receives its branch's runtime database credential. The migration role inherits `postgres`; the runtime role inherits `pg_read_all_data,pg_write_all_data`. Migration credentials are passed only to short-lived tools containers.
 
-GitHub stores only `PREVIEW_DEPLOY_SSH_KEY` and `PREVIEW_SSH_KNOWN_HOSTS`, plus non-secret host/domain repository variables. The jump key permits forwarding only to the preview VPS's SSH port. The VPS key invokes only the forced controller command via a narrowly specified sudo rule.
+GitHub stores only `PREVIEW_DEPLOY_SSH_KEY` and `PREVIEW_SSH_KNOWN_HOSTS`, plus non-secret host/domain/port repository variables. The jump key permits forwarding only to the preview VPS's SSH port. The VPS key invokes only the forced controller command via a narrowly specified sudo rule.
 
 Auth0 Management API user permissions are tenant-wide even though login connections and API audiences are per-preview. Treat all deployed application code as trusted. This POC separates previews from production but is not a sandbox for hostile code: Docker containers share a kernel and the Caddy edge network.
 
