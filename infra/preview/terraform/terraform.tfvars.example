@@ -1,0 +1,5 @@
+ssh_public_key = "ssh-ed25519 REPLACE"
+ssh_private_key_path = "/private/path/preview-admin"
+ingress_private_key_path = "/private/path/court_smp_stackit"
+ingress_public_port_id = "8212b698-7cc1-46eb-a266-80c1b23dd5c0"
+secrets_directory = "/private/path/recovery"

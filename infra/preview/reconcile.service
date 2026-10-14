@@ -1,8 +1,10 @@
 [Unit]
-Description=Remove Monoweb previews for closed PRs
+Description=Reconcile PlanetScale branches and Coolify applications
 After=docker.service network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/monoweb-preview/controller/previewctl.py reconcile
+Environment=PREVIEW_ROOT=/data/monoweb-previews
+ExecStart=/usr/bin/python3 /opt/monoweb-previews/controller/previewctl.py reconcile
 UMask=0077
+TimeoutStartSec=15min

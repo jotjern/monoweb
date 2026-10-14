@@ -8,5 +8,13 @@
   "auth0_domain": "onlineweb-staging.eu.auth0.com",
   "auth0_client_id": "REPLACE",
   "auth0_client_secret": "REPLACE",
-  "max_pr_previews": 2
+  "max_pr_previews": 2,
+  "coolify_url": "http://127.0.0.1:8000",
+  "coolify_token": "BOOTSTRAPPED",
+  "coolify_project_uuid": "BOOTSTRAPPED",
+  "coolify_server_uuid": "BOOTSTRAPPED",
+  "environment_command": [
+    "cat",
+    "/data/monoweb-previews/secrets/{application}.json"
+  ]
 }

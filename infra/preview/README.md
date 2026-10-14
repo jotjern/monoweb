@@ -1,65 +1,55 @@
-# Branch previews on OpenStack
+# Coolify branch previews
 
-This proof of concept hosts a persistent `main` preview and up to two trusted internal PR previews on a dedicated VPS. Each preview has a separate PlanetScale Postgres branch, migration/runtime roles, Auth0 web client, API audience, database login connection, test administrator, and session/calendar signing keys.
+Coolify owns checkout, builds, application containers, health checks, HTTPS, logs, and restarts.
+A host-side reconciler polls the public fork every five minutes and connects the external resources Coolify does not provision:
 
-## Running infrastructure
+- `main` remains available; each open internal PR gets a separate Coolify Compose application.
+- Each application gets its own PlanetScale Postgres development branch and runtime/migration roles.
+- Each preview gets its own staging Auth0 clients, API audience, connection, and test login.
+- Closed PRs lose their Coolify application, PlanetScale branch, and Auth0 resources. Fork PRs never deploy.
+- Two concurrent PR previews are allowed by default. Builds are serialized by Coolify on this 4 CPU / 8 GiB host.
 
-- Repository: `jotjern/monoweb`.
-- Preview VPS: `monoweb-preview-poc`, Ubuntu 24.04, 4 vCPUs, 8 GiB RAM, 80 GiB boot volume, private address `192.168.73.66`.
-- Public ingress: `129.241.100.225` on `court-smp-26-3`. Two systemd socket proxies forward TCP 80/443 to the VPS over an additional private interface (`192.168.73.254`). Minecraft still uses 25565 and its original network interface.
-- Caddy on the preview VPS terminates HTTPS and routes hostnames to Docker containers.
-- Main preview: `https://main.129.241.100.225.sslip.io`, API at `https://main-api.129.241.100.225.sslip.io`.
-- PR N: `https://pr-N-web.129.241.100.225.sslip.io`, API at `https://pr-N-api.129.241.100.225.sslip.io`. The `-web` suffix prevents sslip.io from interpreting the numeric PR prefix as part of the IP address.
-- PlanetScale: `jotjernshaugen/monoweb-preview-test`. The main preview uses `preview-main`; PR N uses `pr-N`. The default database branch `main` is not used by the application.
-- Auth0 tenant: `onlineweb-staging.eu.auth0.com`. Preview connections and applications are separately named `Monoweb-Preview-*` / `Monoweb preview *`.
+There are no preview Dockerfiles, separate fixtures, deployment HTTP service, or GitHub deployment secrets.
+`compose.yaml` uses the existing web/RPC Dockerfiles. `build.sh` uses the RPC dependency stage for Prisma and the existing `pnpm -F @dotkomonline/db apply-fixtures` command, only on an empty database. It binds the existing Dotkom fixture member to the preview's Auth0 login. The compatibility stage insertion allows the persistent preview to build older commits too.
 
-The Minecraft host only forwards web TCP connections. No application containers or application secrets run there. Its floating IP, administration SSH listener, and game processes remain assigned as before. The ingress systemd units are in `ingress/`. Operator SSH reaches the private VPS through the existing `court` host.
+## Configuration source
 
-## Deployment lifecycle
+The private `controller.json` contains provider credentials and an `environment_command` returning a JSON object of string values. Initially it reads private `web.json` / `rpc.json` configuration files exported from the working POC, rather than constructing app environments in Python. Only per-preview resource bindings use `${ORIGIN}`, `${RPC_ORIGIN}`, `${DATABASE_URL}`, `${WEB_CLIENT_ID}`, `${WEB_CLIENT_SECRET}`, `${RPC_CLIENT_ID}`, `${RPC_CLIENT_SECRET}`, `${AUTH0_DOMAIN}`, `${AUTH_SECRET}`, and `${SIGNING_KEY}` placeholders.
 
-`.github/workflows/preview.yml` requests deploys on pushes to `main`, internal PR opens/updates/reopens, and manual dispatch. It requests teardown when an internal PR closes. Fork PRs are excluded both by the workflow and the host controller.
+Coolify stores the rendered application configuration. The migration credential is build-only. PlanetScale/Auth0 provisioning tokens stay outside application builds and containers. Shared keys must agree; only the two conflicting web/RPC Auth0 keys are namespaced in Compose.
 
-A separate credential-free job runs controller/API boundary tests first. The deployment job runs `deploy_client.py` against `https://deploy.129.241.100.225.sslip.io` using a preview-scoped bearer token. It queues a deploy or cleanup operation and polls its status. All requests use verified HTTPS; unauthenticated calls, invalid IDs/SHAs, arbitrary commands, and destruction of main are rejected. Before building and again before starting containers, the host controller checks the requested SHA against GitHub's current main/PR head.
+Later, replace `environment_command` with `doppler secrets download --project monoweb-{application} --config <preview-config> --no-file --format json`, supplying its service token to the trusted reconciler. Alternatively use Coolify's native Doppler secret-manager integration and `{{vault.KEY}}` references. No Doppler configuration has been created by this change. Changes to the configuration source require an explicit redeployment of existing applications.
 
-The API runs as the unprivileged `preview-deploy` account, listening only on the Docker bridge at `172.18.0.1:9090` behind Caddy. That account can invoke exactly `/opt/monoweb-preview/controller/previewctl.py dispatch` through sudo, with `PREVIEW_COMMAND` preserved. The root dispatcher independently validates the operation and arguments. The API receives no PlanetScale or Auth0 provisioning credentials. Its bearer token is stored mode 0600 at `/home/preview-deploy/.config/preview-api-token`; operation logs/status are private under `/home/preview-deploy/.local/state/preview-api/`. The service unit is `deploy-api.service`; install the program root-owned under `/usr/local/lib/monoweb-preview/` and the Caddy route from `deploy-api.caddy.example`.
+The POC baseline uses Turnstile test keys and disables email, Google Workspace, RIF, telemetry, real uploads, and payments. Do not replace it with an unfiltered production export. The application RPC clients still have staging-tenant user-management access; use a dedicated preview Auth0 tenant before expanding access beyond trusted branches.
 
-The host controller serializes operations using a lock, provisions or reuses resources, fetches the exact source commit, builds a tools image, runs Prisma migrations/generation and an idempotent synthetic seed, builds the app images, starts a separate Compose project, waits for container health, reloads Caddy, and checks both public HTTPS endpoints. Docker restart policies recover crashed processes and restart stacks after a host reboot. An hourly systemd timer removes previews for closed PRs if a GitHub cleanup event was missed.
+## Terraform and recovery
 
-Builds run on the preview VPS for this proof of concept. Application build processes receive no PlanetScale service token or Auth0 provisioning credential. Frontend builds use non-secret placeholders for server configuration; actual server secrets are supplied at container startup. Per-preview public URLs are embedded at build time.
+`terraform/` owns the private network, router, security groups, keypair, 4 CPU / 8 GiB VPS, retained data volume, and the additive Minecraft ingress NIC/forwarders. It references the Minecraft VM and its existing public NIC without managing their lifecycle. The two available floating IPs are already allocated, so HTTP/HTTPS share Minecraft's IP; game ports/services are untouched.
 
-## Credentials
+Terraform uploads the trusted controller independently of application deployments. Updates to server integration code are applied through Terraform, not executed from a PR. The Coolify installer and release are pinned; auto-updates are disabled. The 40 GiB data volume has `prevent_destroy` and holds Coolify's database, SSH keys, and provisioning state; deleting/replacing the boot VM retains it.
 
-`/opt/monoweb-preview/secrets/controller.json` is root-readable only and follows `controller.example.json`. The PlanetScale service token is scoped to the preview database with `read_branch`, `create_branch`, `delete_branch`, `connect_branch`, and `delete_branch_password`. It has no production-branch connection or deletion permissions. The dedicated Auth0 provisioner can manage preview resources in the staging tenant; it is not a production tenant credential.
-
-Per-preview state lives in root-only `/opt/monoweb-preview/states/ID.json`. It records resource IDs, database credentials, client secrets, the synthetic admin password, and session/signing keys. Application `.env` files are mode 0600 under `/opt/monoweb-preview/stacks/ID/`. Only the backend receives its branch's runtime database credential. The migration role inherits `postgres`; the runtime role inherits `pg_read_all_data,pg_write_all_data`. Migration credentials are passed only to short-lived tools containers.
-
-GitHub stores only `PREVIEW_DEPLOY_TOKEN`, plus the non-secret `PREVIEW_DEPLOY_URL` and `PREVIEW_BASE_DOMAIN` variables. This token permits only preview operations; it does not provide a shell or direct database/Auth0 access. Rotate it when deployment jobs are idle by updating the GitHub secret and replacing the API token file with a new random value. No service restart is needed for token changes.
-
-Auth0 Management API user permissions are tenant-wide even though login connections and API audiences are per-preview. Treat all deployed application code as trusted. This POC separates previews from production but is not a sandbox for hostile code: Docker containers share a kernel and the Caddy edge network.
-
-## Access and operations
-
-Administrator SSH:
+Keep Terraform state, the OpenStack application credential, SSH private keys, and a private recovery directory **outside Git**. The recovery directory contains `controller.json`, `web.json`, `rpc.json`, `coolify-admin.json`, and optionally `states/*.json`. Never overwrite a newer live state with an older recovery snapshot. The working machine stores these under `~/.config/monoweb-preview/` with restricted permissions.
 
 ```sh
-ssh -J court -i ~/.ssh/monoweb-preview-admin ubuntu@192.168.73.66
-sudo /opt/monoweb-preview/controller/previewctl.py list
-sudo docker ps
-sudo journalctl -u monoweb-preview-build-main
+source '/Users/jotjern/Downloads/app-cred-Codex v2-openrc.sh'
+cd infra/preview/terraform
+terraform init -backend-config='path=/private/path/preview.tfstate'
+terraform plan -var-file=/private/path/preview.tfvars
+terraform apply -var-file=/private/path/preview.tfvars
 ```
 
-Test account emails are `admin.main@preview.example.com` and `admin.pr-N@preview.example.com`. Retrieve their generated passwords from the corresponding root-only state file; never commit them. The login connection disables public signup. Authorization remains enabled, and the seed assigns the test administrator a real Dotkom group membership.
+See `terraform.tfvars.example`. OpenStack API access requires NTNU network access; an SSH SOCKS proxy through the ingress host also works (`HTTPS_PROXY=socks5h://127.0.0.1:11080`). Existing POC resources were imported into Terraform rather than recreated. Restore the external state file to operate on those resources; do not apply an empty state against the existing deployment.
 
-The controller and Dockerfiles are installed under `/opt/monoweb-preview/controller`. Application deployments intentionally do not replace that trusted controller or the deployment API; infrastructure changes must be installed by an administrator. Install `reconcile.service` and `reconcile.timer` as `monoweb-preview-reconcile.*`. Caddy's fixed Compose manifest is `edge.compose.json`.
+For a deleted VPS, refresh/plan/apply recreates it, reattaches the retained volume, mounts `/data`, reinstalls the pinned Coolify release if needed, restores the trusted reconciler, and resumes previews. The fixed private address keeps the ingress configuration stable. A retained disk is not an off-site backup: copy `/data/monoweb-previews` and Coolify's normal database backups off the host before intentional storage changes. Initial recovery copies exist locally; external scheduled backup storage remains a follow-up.
 
-## POC limits
+## Operations
 
-- Synthetic event/article/group data only; no production database or user import.
-- Upload storage and Stripe payments are unconfigured and will not work. No AWS credentials are supplied. Email delivery, Workspace synchronization, Google Sheets writes, and external telemetry are disabled/unconfigured.
-- Turnstile uses its documented test keys; this is a preview environment, not production bot protection.
-- Deployments can briefly interrupt a preview. Schema migrations are applied in place; incompatible migration edits may require destroying/recreating that PR preview. There is no automatic database schema merge or production deployment.
-- Capacity is limited to main plus two PRs. Builds are serialized. Image/build-cache retention should be revisited before wider use; teardown removes the closed preview's application images and source checkout.
-- The temporary `sslip.io` hostnames can be replaced with a dedicated wildcard DNS domain by updating the controller config and GitHub repository variable, then rebuilding/reprovisioning callback URLs.
-- Preview state and credentials need a secure backup/rotation procedure before this becomes long-lived infrastructure.
+- Dashboard: `https://coolify.129.241.100.225.sslip.io` (credentials in the private local credential file).
+- Persistent preview: `https://main.129.241.100.225.sslip.io`.
+- PR preview: `https://pr-N-web.129.241.100.225.sslip.io`; API: `https://pr-N-api.129.241.100.225.sslip.io`.
+- Do not use `pr-N.<ip>.sslip.io`: numeric labels can resolve to a different IP.
+- `journalctl -u monoweb-preview-reconcile.service` shows provisioning; Coolify shows builds and runtime logs.
+- To reconcile now: `sudo systemctl start monoweb-preview-reconcile.service`.
+- Test logins are recorded privately in `/data/monoweb-previews/states/<preview>.json`.
 
-Run controller boundary tests with `python3 -m unittest discover -s infra/preview -p 'test_*.py'`.
+Validation: `python3 -m unittest discover -s infra/preview -p 'test_*.py'`, `sh -n infra/preview/build.sh`, and `terraform -chdir=infra/preview/terraform validate`. Live migration checks cover HTTPS, fixture content, Auth0 login, branch isolation, and Minecraft availability.

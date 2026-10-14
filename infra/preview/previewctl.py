@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
 """Trusted host controller. Application builds never receive control-plane credentials."""
-import contextlib
 import fcntl
 import json
 import os
 from pathlib import Path
 import re
 import secrets
-import shlex
-import shutil
 import subprocess
 import sys
-import tarfile
 import time
 import urllib.error
 import urllib.request
 
-ROOT = Path(os.environ.get("PREVIEW_ROOT", "/opt/monoweb-preview"))
+ROOT = Path(os.environ.get("PREVIEW_ROOT", "/data/monoweb-previews"))
 SAFE_ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LANG": "C.UTF-8"}
-PREVIEW_ID = re.compile(r"^(main|poc|pr-[1-9][0-9]*)$")
+PREVIEW_ID = re.compile(r"^(main|pr-[1-9][0-9]*)$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 def run(args, *, cwd=None, capture=False, env=None):
@@ -32,14 +28,6 @@ def private_json(path, value):
     with os.fdopen(fd, "w") as f:
         json.dump(value, f, indent=2)
     temporary.replace(path)
-
-def write_env(path, values):
-    # Docker --env-file parses literal values; reject line injection.
-    if any("\n" in str(v) or "\r" in str(v) for v in values.values()):
-        raise ValueError("Invalid multiline environment value")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write("".join(f"{k}={v}\n" for k, v in values.items()))
 
 def http(method, url, data=None, token=None):
     headers = {"Content-Type": "application/json", "User-Agent": "monoweb-preview-controller"}
@@ -65,7 +53,7 @@ def http(method, url, data=None, token=None):
             if method == "DELETE" and error.code == 404:
                 return None
             details = json.loads(error.read() or b"{}")
-            raise RuntimeError(f"{method} {url}: HTTP {error.code}: {details.get('message', details.get('error', 'request failed'))}") from None
+            raise RuntimeError(f"{method} {url}: HTTP {error.code}: {details.get('message', details.get('error', 'request failed'))}; fields: {', '.join(details.get('errors', {}))}") from None
 
 class Controller:
     def __init__(self):
@@ -148,7 +136,7 @@ class Controller:
             active = [p for p in self.states.glob("pr-*.json")]
             if preview.startswith("pr-") and len(active) >= self.config.get("max_pr_previews", 2):
                 raise RuntimeError("Preview capacity reached; remove an unused PR preview first")
-            state = {"id": preview, "branch": "preview-main" if preview == "main" else preview,
+            state = {"id": preview, "branch": "coolify-" + preview,
                 "origin": origin,
                 "rpc_origin": f"https://{preview}-api.{self.config['base_domain']}",
                 "auth_secret": secrets.token_hex(32), "signing_key": secrets.token_hex(32),
@@ -225,199 +213,113 @@ class Controller:
             save()
         return state
 
-    def environments(self, state, stack):
-        domain = self.config["auth0_domain"]
-        common = {"DOPPLER_ENVIRONMENT": "dev", "OTEL_SDK_DISABLED": "1", "AUTH0_ISSUER": "https://" + domain,
-                  "AUTH0_AUDIENCES": state["rpc_origin"]}
-        web = {**common, "AUTH0_CLIENT_ID": state["web_client"]["client_id"],
-            "AUTH0_CLIENT_SECRET": state["web_client"]["client_secret"], "AUTH_SECRET": state["auth_secret"],
-            "SIGNING_KEY": state["signing_key"], "RPC_HOST": f"http://{state['id']}-rpc:4444", "NEXT_PUBLIC_ORIGIN": state["origin"],
-            "NEXT_PUBLIC_RPC_HOST": state["rpc_origin"], "AWS_CLOUDFRONT_URL": state["origin"],
-            "NEXT_PUBLIC_TURNSTILE_SITE_KEY": "1x00000000000000000000AA"}
-        rpc = {**common, "AUTH0_CLIENT_ID": state["rpc_client"]["client_id"],
-            "AUTH0_CLIENT_SECRET": state["rpc_client"]["client_secret"], "AUTH0_MGMT_TENANT": domain,
-            "AUTH0_WEB_CLIENT_ID": state["web_client"]["client_id"], "AUTH0_WEB_CLIENT_SECRET": state["web_client"]["client_secret"],
-            "DATABASE_URL": state["db_runtime"]["database_url"], "WEB_PUBLIC_ORIGIN": state["origin"],
-            "ALLOWED_ORIGINS": state["origin"], "UNSAFE_DISABLE_AUTHORIZATION": "false",
-            "AWS_REGION": "eu-north-1", "AWS_S3_BUCKET": "preview-uploads-unconfigured",
-            "AWS_EC2_METADATA_DISABLED": "true", "STRIPE_SECRET_KEY": "sk_test_preview_payments_unconfigured",
-            "STRIPE_WEBHOOK_IDENTIFIER": "dev", "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA"}
-        write_env(stack / "web.env", web)
-        write_env(stack / "rpc.env", rpc)
+    def coolify(self, method, path, data=None):
+        return http(method, self.config['coolify_url'] + '/api/v1' + path, data, self.config['coolify_token'])
 
-    def source(self, preview, sha):
-        repo = ROOT / "source.git"
-        if not repo.exists():
-            run(["git", "clone", "--bare", "https://github.com/" + self.config["repository"] + ".git", str(repo)])
-        run(["git", "--git-dir", str(repo), "fetch", "--depth=1", "origin", sha])
-        build = ROOT / "builds" / preview / sha
-        build.mkdir(parents=True, exist_ok=True)
-        archive = build / "source.tar"
-        with archive.open("wb") as f:
-            subprocess.run(["git", "--git-dir", str(repo), "archive", sha], env=SAFE_ENV, stdout=f, check=True)
-        with tarfile.open(archive) as tar:
-            tar.extractall(build, filter="data")
-        archive.unlink()
-        overlay = build / "infra/preview"
-        overlay.mkdir(parents=True, exist_ok=True)
-        for name in ("Dockerfile.web", "Dockerfile.rpc", "Dockerfile.tools", "seed.mts"):
-            shutil.copyfile(self.directory / name, overlay / name)
-        ignore = build / ".dockerignore"
-        ignore.write_text(ignore.read_text().replace("\ninfra\n", "\ninfra/*\n!infra/preview/\n") + "\n**/.env*\n.preview-state\n")
-        config = build / "apps/web/next.config.ts"
-        text = config.read_text()
-        if "PREVIEW_STANDALONE" not in text:
-            text = 'import path from "node:path"\n' + text.replace("const config: NextConfig = {", 'const config: NextConfig = {\n  output: "standalone",\n  outputFileTracingRoot: path.resolve(process.cwd(), "../.."),')
-            config.write_text(text)
-        return build
+    def configuration(self, state):
+        # JSON configuration on stdout, also supported by Doppler secrets download.
+        from string import Template
+        context = {
+            'WEB_CLIENT_ID': state['web_client']['client_id'], 'WEB_CLIENT_SECRET': state['web_client']['client_secret'],
+            'RPC_CLIENT_ID': state['rpc_client']['client_id'], 'RPC_CLIENT_SECRET': state['rpc_client']['client_secret'],
+            'AUTH0_DOMAIN': self.config['auth0_domain'], 'ORIGIN': state['origin'], 'RPC_ORIGIN': state['rpc_origin'],
+            'DATABASE_URL': state['db_runtime']['database_url'], 'AUTH_SECRET': state['auth_secret'],
+            'SIGNING_KEY': state['signing_key'],
+        }
+        values = {}
+        for application in ('web', 'rpc'):
+            command = [part.replace('{application}', application) for part in self.config['environment_command']]
+            source = json.loads(run(command, capture=True))
+            for key, value in source.items():
+                if not re.fullmatch(r'[A-Z][A-Z0-9_]*', key) or not isinstance(value, str):
+                    raise ValueError('Expected a JSON object of environment names and string values')
+                name = application.upper() + '_' + key if key in ('AUTH0_CLIENT_ID', 'AUTH0_CLIENT_SECRET') else key
+                rendered = Template(value).substitute(context)
+                if name in values and values[name] != rendered:
+                    raise ValueError('Conflicting shared configuration: ' + name)
+                values[name] = rendered
+        return values
 
-    def compose(self, state, stack, tag):
-        services = {}
-        for name, port, memory in [("web", 3000, "1g"), ("rpc", 4444, "768m")]:
-            services[name] = {"image": f"monoweb-preview-{name}:{tag}", "restart": "unless-stopped",
-                "env_file": [str(stack / (name + ".env"))], "mem_limit": memory, "cpus": 1.5,
-                "security_opt": ["no-new-privileges:true"], "cap_drop": ["ALL"],
-                "networks": {"default": {}, "preview-edge": {"aliases": [state["id"] + "-" + name]}},
-                "logging": {"driver": "json-file", "options": {"max-size": "10m", "max-file": "2"}},
-                "healthcheck": {"test": ["CMD", "node", "-e", f"fetch('http://127.0.0.1:{port}{'/health' if name == 'rpc' else '/api/auth/session'}').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"], "interval": "15s", "timeout": "10s", "retries": 6, "start_period": "40s"}}
-        # Separate application networks; edge network is only for the reverse proxy.
-        services["rpc"]["networks"] = {"default": {}, "preview-edge": {"aliases": [state["id"] + "-rpc"]}}
-        manifest = {"services": services, "networks": {"preview-edge": {"external": True}}}
-        (stack / "compose.json").write_text(json.dumps(manifest, indent=2))
-
-    def route(self, state):
-        preview = state["id"]
-        route = Path("/etc/caddy/previews") / (preview + ".caddy")
-        route.parent.mkdir(exist_ok=True)
-        route.write_text(f"{state['origin']} {{\n header X-Robots-Tag \"noindex, nofollow\"\n @preview_login path /api/auth/authorize\n rewrite @preview_login /api/auth/authorize?connection={state['connection']['name']}&{{query}}\n reverse_proxy {preview}-web:3000\n}}\n{state['rpc_origin']} {{\n header X-Robots-Tag \"noindex, nofollow\"\n reverse_proxy {preview}-rpc:4444\n}}\n")
-        run(["docker", "exec", "preview-caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"])
-        run(["docker", "exec", "preview-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"])
-
-    def wait_public(self, state):
-        for _ in range(20):
-            try:
-                for url in (state["origin"], state["rpc_origin"] + "/health"):
-                    with urllib.request.urlopen(url, timeout=10) as response:
-                        if response.status != 200:
-                            raise RuntimeError("Preview returned an unexpected HTTP status")
-                return
-            except (OSError, urllib.error.URLError, RuntimeError):
-                time.sleep(2)
-        raise RuntimeError("Public HTTPS readiness check failed")
-
-    def deploy(self, preview, sha):
-        if not SHA.fullmatch(sha):
-            raise ValueError("Deployment requires a full commit SHA")
-        expected = self.expected_commit(preview)
-        if expected and expected != sha:
-            raise ValueError("Refusing an outdated or mismatched deployment commit")
-        print(f"Provisioning {preview}", flush=True)
+    def deploy(self, preview, sha, branch=None):
+        if not SHA.fullmatch(sha) or self.expected_commit(preview) != sha:
+            raise ValueError('Refusing mismatched source commit')
         state = self.provision(preview)
-        path = self.state_path(preview)
-        build = self.source(preview, sha)
-        stack = ROOT / "stacks" / preview
-        stack.mkdir(parents=True, exist_ok=True, mode=0o700)
-        tag = preview + "-" + sha[:12]
-        tools = "monoweb-preview-tools:" + tag
-        run(["docker", "build", "--progress=plain", "-f", str(self.directory / "Dockerfile.tools"), "-t", tools, "."], cwd=build)
-        migration_file = stack / "migration.env"
-        write_env(migration_file, {"DATABASE_URL": state["db_migrator"]["database_url"], "PREVIEW_ID": preview,
-            "PREVIEW_ADMIN_ID": state["admin"]["user_id"], "PREVIEW_ORIGIN": state["origin"]})
-        try:
-            args = ["docker", "run", "--rm", "--env-file", str(migration_file), tools]
-            run([*args, "pnpm", "-F", "@dotkomonline/db", "exec", "prisma", "migrate", "deploy"])
-            run(["docker", "run", "--rm", "--env-file", str(migration_file), "-v",
-                 f"{build}/packages/db/generated:/app/packages/db/generated", tools,
-                 "pnpm", "-F", "@dotkomonline/db", "generate"])
-            run([*args, "pnpm", "-F", "@dotkomonline/db", "exec", "tsx", "/app/infra/preview/seed.mts"])
-        finally:
-            migration_file.unlink(missing_ok=True)
-        run(["docker", "build", "--progress=plain", "-f", str(self.directory / "Dockerfile.rpc"), "-t", "monoweb-preview-rpc:" + tag, "."], cwd=build)
-        run(["docker", "build", "--progress=plain", "-f", str(self.directory / "Dockerfile.web"), "-t", "monoweb-preview-web:" + tag,
-            "--build-arg", "NEXT_PUBLIC_ORIGIN=" + state["origin"], "--build-arg", "NEXT_PUBLIC_RPC_HOST=" + state["rpc_origin"], "."], cwd=build)
-        if expected and self.expected_commit(preview) != sha:
-            raise ValueError("Branch changed during build; refusing stale deployment")
-        self.environments(state, stack)
-        self.compose(state, stack, tag)
-        with contextlib.suppress(subprocess.CalledProcessError):
-            run(["docker", "network", "create", "preview-edge"], capture=True)
-        run(["docker", "compose", "-p", "preview-" + preview, "-f", str(stack / "compose.json"), "up", "-d", "--wait", "--wait-timeout", "180", "--remove-orphans"])
-        self.route(state)
-        self.wait_public(state)
-        state.update(status="running", sha=sha, deployed_at=int(time.time()))
-        private_json(path, state)
-        print("Preview ready: " + state["origin"], flush=True)
+        values = self.configuration(state)
+        domains = [{'name': 'web', 'domain': state['origin'] + ':3000'}, {'name': 'rpc', 'domain': state['rpc_origin'] + ':4444'}]
+        import base64
+        script = base64.b64encode((self.directory / 'build.sh').read_bytes()).decode()
+        build_command = f'printf %s {script} | base64 -d > /tmp/preview-build.sh && sh /tmp/preview-build.sh'
+        definition = {
+            'name': 'monoweb-' + preview, 'git_repository': 'https://github.com/' + self.config['repository'],
+            'git_branch': branch or 'main', 'git_commit_sha': sha, 'build_pack': 'dockercompose',
+            'docker_compose_location': '/infra/preview/compose.yaml', 'docker_compose_raw': (self.directory / 'compose.yaml').read_text(),
+            'docker_compose_domains': domains, 'docker_compose_custom_build_command': build_command,
+            'is_auto_deploy_enabled': False, 'is_preview_deployments_enabled': False, 'instant_deploy': False,
+            'use_build_secrets': True, 'is_preserve_repository_enabled': True,
+        }
+        if 'coolify_uuid' not in state:
+            app = self.coolify('POST', '/applications/public', {**definition, 'project_uuid': self.config['coolify_project_uuid'],
+                'server_uuid': self.config['coolify_server_uuid'], 'environment_name': 'preview', 'ports_exposes': '3000'})
+            state['coolify_uuid'] = app['uuid']
+            private_json(self.state_path(preview), state)
+        else:
+            # The update endpoint uses the saved Compose definition supplied at creation.
+            update = {k:v for k,v in definition.items() if k != 'docker_compose_raw'}
+            self.coolify('PATCH', '/applications/' + state['coolify_uuid'], update)
+        entries = [{'key': k, 'value': v, 'is_runtime': True, 'is_buildtime': True, 'is_literal': True} for k,v in values.items()]
+        entries.extend({'key': k, 'value': v, 'is_runtime': False, 'is_buildtime': True, 'is_literal': True} for k,v in {
+            'MIGRATION_DATABASE_URL': state['db_migrator']['database_url'], 'PREVIEW_ADMIN_ID': state['admin']['user_id'],
+            'PREVIEW_ADMIN_EMAIL': state['admin']['email']}.items())
+        self.coolify('PATCH', '/applications/' + state['coolify_uuid'] + '/envs/bulk', {'data': entries})
+        deployment = self.coolify('GET', '/deploy?uuid=' + state['coolify_uuid'] + '&force=true')
+        state.update(sha=sha, deployment=deployment, status='queued')
+        private_json(self.state_path(preview), state)
+        print('Queued in Coolify: ' + state['origin'], flush=True)
 
     def destroy(self, preview):
-        if not preview.startswith("pr-") and preview != "poc":
-            raise ValueError("The persistent main preview cannot be destroyed by automation")
-        path = self.state_path(preview)
-        if not path.exists():
-            return
-        state = json.loads(path.read_text())
-        if state["id"] != preview or state["branch"] != preview:
-            raise ValueError("Resource ownership mismatch")
-        stack = ROOT / "stacks" / preview
-        if (stack / "compose.json").exists():
-            run(["docker", "compose", "-p", "preview-" + preview, "-f", str(stack / "compose.json"), "down", "--remove-orphans"])
-        (Path("/etc/caddy/previews") / (preview + ".caddy")).unlink(missing_ok=True)
-        run(["docker", "exec", "preview-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"])
-        if "admin" in state:
-            self.auth("DELETE", "/users/" + state["admin"]["user_id"])
-        if "connection" in state:
-            self.auth("DELETE", "/connections/" + state["connection"]["id"])
-        for key in ("web_client", "rpc_client"):
-            if key in state:
-                self.auth("DELETE", "/clients/" + state[key]["client_id"])
-        if "api" in state:
-            self.auth("DELETE", "/resource-servers/" + state["api"]["id"])
-        branches = self.pscale("branch", "list", self.config["planetscale_database"])
-        if any(b["name"] == preview for b in branches):
-            self.pscale("branch", "delete", self.config["planetscale_database"], preview, "--force")
-        shutil.rmtree(stack, ignore_errors=True)
-        shutil.rmtree(ROOT / "builds" / preview, ignore_errors=True)
-        # Delete only images belonging to this preview, never shared images or volumes.
-        images = run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"], capture=True).splitlines()
-        for image in images:
-            if re.fullmatch(r"monoweb-preview-(web|rpc|tools):" + re.escape(preview) + r"-[0-9a-f]{12}", image):
-                run(["docker", "image", "rm", image])
-        path.unlink()
-        print("Removed preview " + preview)
+        if not re.fullmatch(r'pr-[1-9][0-9]*', preview):
+            raise ValueError('Only PR previews can be deleted')
+        state = json.loads(self.state_path(preview).read_text())
+        if state['id'] != preview or state['branch'] != 'coolify-' + preview:
+            raise ValueError('Resource ownership mismatch')
+        if 'coolify_uuid' in state:
+            self.coolify('DELETE', '/applications/' + state['coolify_uuid'])
+        if 'admin' in state: self.auth('DELETE', '/users/' + state['admin']['user_id'])
+        if 'connection' in state: self.auth('DELETE', '/connections/' + state['connection']['id'])
+        for key in ('web_client', 'rpc_client'):
+            if key in state: self.auth('DELETE', '/clients/' + state[key]['client_id'])
+        if 'api' in state: self.auth('DELETE', '/resource-servers/' + state['api']['id'])
+        self.pscale('branch', 'delete', self.config['planetscale_database'], state['branch'], '--force')
+        self.state_path(preview).unlink()
 
     def reconcile(self):
-        for path in self.states.glob("pr-*.json"):
-            preview = path.stem
-            pr = http("GET", f"https://api.github.com/repos/{self.config['repository']}/pulls/{preview.removeprefix('pr-')}")
-            if pr["state"] == "closed":
-                self.destroy(preview)
+        base = f'https://api.github.com/repos/{self.config["repository"]}'
+        # One list request, rather than polling every PR. GitHub's public unauthenticated quota is sufficient at 5 minutes.
+        prs = http('GET', base + '/pulls?state=open&per_page=100')
+        desired = {'main': (http('GET', base + '/commits/main')['sha'], 'main')}
+        for pr in prs:
+            if pr['head']['repo'] and pr['head']['repo']['full_name'] == self.config['repository']:
+                desired['pr-' + str(pr['number'])] = (pr['head']['sha'], pr['head']['ref'])
+        # Clean first to release capacity. Never remove main.
+        for path in self.states.glob('pr-*.json'):
+            if path.stem not in desired: self.destroy(path.stem)
+        for preview, (sha, branch) in desired.items():
+            path = self.state_path(preview)
+            state = json.loads(path.read_text()) if path.exists() else {}
+            if state.get('sha') != sha or 'coolify_uuid' not in state:
+                self.deploy(preview, sha, branch)
+
 
 def main():
     os.umask(0o077)
-    args = sys.argv[1:]
-    if args == ["dispatch"]:
-        args = shlex.split(os.environ.get("PREVIEW_COMMAND", ""))
-        if not args or args[0] not in ("deploy", "destroy", "list") or (len(args) > 1 and args[1] == "poc"):
-            raise ValueError("Allowed commands: deploy main|pr-N SHA, destroy pr-N, list")
     ROOT.mkdir(exist_ok=True)
-    with (ROOT / "controller.lock").open("w") as lock:
+    with (ROOT / 'controller.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         controller = Controller()
-        if len(args) == 3 and args[0] == "deploy":
-            controller.deploy(args[1], args[2])
-        elif len(args) == 2 and args[0] == "destroy":
-            controller.destroy(args[1])
-        elif args == ["reconcile"]:
-            controller.reconcile()
-        elif args == ["list"]:
-            for path in controller.states.glob("*.json"):
-                s = json.loads(path.read_text())
-                print(json.dumps({k: s.get(k) for k in ("id", "status", "origin", "branch", "sha")}))
-        else:
-            raise ValueError("Usage: previewctl deploy ID SHA | destroy pr-N | list | reconcile")
+        if sys.argv[1:] == ['reconcile']: controller.reconcile()
+        elif len(sys.argv) == 4 and sys.argv[1] == 'deploy': controller.deploy(sys.argv[2], sys.argv[3])
+        elif len(sys.argv) == 3 and sys.argv[1] == 'destroy': controller.destroy(sys.argv[2])
+        else: raise ValueError('Usage: previewctl.py reconcile | deploy ID SHA | destroy pr-N')
 
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as error:
-        print(f"Preview failed: {error}", file=sys.stderr)
-        sys.exit(1)
+if __name__ == '__main__':
+    main()

@@ -1,7 +1,0 @@
-https://deploy.129.241.100.225.sslip.io {
-  header X-Robots-Tag "noindex, nofollow"
-  request_body {
-    max_size 4KB
-  }
-  reverse_proxy 172.18.0.1:9090
-}
