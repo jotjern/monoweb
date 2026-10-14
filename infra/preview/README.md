@@ -13,13 +13,15 @@ This proof of concept hosts a persistent `main` preview and up to two trusted in
 - PlanetScale: `jotjernshaugen/monoweb-preview-test`. The main preview uses `preview-main`; PR N uses `pr-N`. The default database branch `main` is not used by the application.
 - Auth0 tenant: `onlineweb-staging.eu.auth0.com`. Preview connections and applications are separately named `Monoweb-Preview-*` / `Monoweb preview *`.
 
-The Minecraft host only forwards web TCP connections and acts as a restricted SSH jump host on port 2222. That dedicated SSH listener permits only the preview jump account and forwarding to the preview VPS; the existing administration SSH listener on port 22 is unchanged. No application containers or application secrets run there. Its floating IP and game processes remain assigned as before. The ingress systemd units and restricted SSH configuration are in `ingress/`.
+The Minecraft host only forwards web TCP connections. No application containers or application secrets run there. Its floating IP, administration SSH listener, and game processes remain assigned as before. The ingress systemd units are in `ingress/`. Operator SSH reaches the private VPS through the existing `court` host.
 
 ## Deployment lifecycle
 
 `.github/workflows/preview.yml` requests deploys on pushes to `main`, internal PR opens/updates/reopens, and manual dispatch. It requests teardown when an internal PR closes. Fork PRs are excluded both by the workflow and the host controller.
 
-The deployment job runs no repository code on the GitHub runner. A separate credential-free job runs controller boundary tests first. Deployment uses a restricted SSH key through `monoweb-preview-jump` to `preview-deploy` on the VPS. The forced command accepts only `deploy main|pr-N SHA`, `destroy pr-N`, and `list`. It cannot open an interactive shell, copy arbitrary files, or delete the persistent main preview. Before building and again before starting containers, the controller checks the requested SHA against GitHub's current main/PR head.
+A separate credential-free job runs controller/API boundary tests first. The deployment job runs `deploy_client.py` against `https://deploy.129.241.100.225.sslip.io` using a preview-scoped bearer token. It queues a deploy or cleanup operation and polls its status. All requests use verified HTTPS; unauthenticated calls, invalid IDs/SHAs, arbitrary commands, and destruction of main are rejected. Before building and again before starting containers, the host controller checks the requested SHA against GitHub's current main/PR head.
+
+The API runs as the unprivileged `preview-deploy` account, listening only on the Docker bridge at `172.18.0.1:9090` behind Caddy. That account can invoke exactly `/opt/monoweb-preview/controller/previewctl.py dispatch` through sudo, with `PREVIEW_COMMAND` preserved. The root dispatcher independently validates the operation and arguments. The API receives no PlanetScale or Auth0 provisioning credentials. Its bearer token is stored mode 0600 at `/home/preview-deploy/.config/preview-api-token`; operation logs/status are private under `/home/preview-deploy/.local/state/preview-api/`. The service unit is `deploy-api.service`; install the program root-owned under `/usr/local/lib/monoweb-preview/` and the Caddy route from `deploy-api.caddy.example`.
 
 The host controller serializes operations using a lock, provisions or reuses resources, fetches the exact source commit, builds a tools image, runs Prisma migrations/generation and an idempotent synthetic seed, builds the app images, starts a separate Compose project, waits for health, and reloads Caddy. Docker restart policies recover crashed processes and restart stacks after a host reboot. An hourly systemd timer removes previews for closed PRs if a GitHub cleanup event was missed.
 
@@ -31,7 +33,7 @@ Builds run on the preview VPS for this proof of concept. Application build proce
 
 Per-preview state lives in root-only `/opt/monoweb-preview/states/ID.json`. It records resource IDs, database credentials, client secrets, the synthetic admin password, and session/signing keys. Application `.env` files are mode 0600 under `/opt/monoweb-preview/stacks/ID/`. Only the backend receives its branch's runtime database credential. The migration role inherits `postgres`; the runtime role inherits `pg_read_all_data,pg_write_all_data`. Migration credentials are passed only to short-lived tools containers.
 
-GitHub stores only `PREVIEW_DEPLOY_SSH_KEY` and `PREVIEW_SSH_KNOWN_HOSTS`, plus non-secret host/domain/port repository variables. The jump key permits forwarding only to the preview VPS's SSH port. The VPS key invokes only the forced controller command via a narrowly specified sudo rule.
+GitHub stores only `PREVIEW_DEPLOY_TOKEN`, plus the non-secret `PREVIEW_DEPLOY_URL` and `PREVIEW_BASE_DOMAIN` variables. This token permits only preview operations; it does not provide a shell or direct database/Auth0 access. Rotate it when deployment jobs are idle by updating the GitHub secret and replacing the API token file with a new random value. No service restart is needed for token changes.
 
 Auth0 Management API user permissions are tenant-wide even though login connections and API audiences are per-preview. Treat all deployed application code as trusted. This POC separates previews from production but is not a sandbox for hostile code: Docker containers share a kernel and the Caddy edge network.
 
@@ -48,7 +50,7 @@ sudo journalctl -u monoweb-preview-build-main
 
 Test account emails are `admin.main@preview.example.com` and `admin.pr-N@preview.example.com`. Retrieve their generated passwords from the corresponding root-only state file; never commit them. The login connection disables public signup. Authorization remains enabled, and the seed assigns the test administrator a real Dotkom group membership.
 
-The controller and Dockerfiles are installed under `/opt/monoweb-preview/controller`. Application deployments intentionally do not replace that trusted controller; infrastructure changes must be installed by an administrator. Install `reconcile.service` and `reconcile.timer` as `monoweb-preview-reconcile.*`. Caddy's fixed Compose manifest is `edge.compose.json`.
+The controller and Dockerfiles are installed under `/opt/monoweb-preview/controller`. Application deployments intentionally do not replace that trusted controller or the deployment API; infrastructure changes must be installed by an administrator. Install `reconcile.service` and `reconcile.timer` as `monoweb-preview-reconcile.*`. Caddy's fixed Compose manifest is `edge.compose.json`.
 
 ## POC limits
 

@@ -1,0 +1,20 @@
+[Unit]
+Description=Authenticated Monoweb preview deployment API
+After=docker.service network-online.target
+
+[Service]
+User=preview-deploy
+Group=preview-deploy
+Environment=PREVIEW_API_BIND=172.18.0.1
+ExecStart=/usr/bin/python3 /usr/local/lib/monoweb-preview/deploy_api.py
+Restart=on-failure
+UMask=0077
+MemoryMax=512M
+TasksMax=256
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/preview-deploy /opt/monoweb-preview /etc/caddy/previews
+ProtectHome=no
+
+[Install]
+WantedBy=multi-user.target

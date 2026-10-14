@@ -359,8 +359,8 @@ class Controller:
 def main():
     os.umask(0o077)
     args = sys.argv[1:]
-    if args == ["ssh"]:
-        args = shlex.split(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
+    if args == ["dispatch"]:
+        args = shlex.split(os.environ.get("PREVIEW_COMMAND", ""))
         if not args or args[0] not in ("deploy", "destroy", "list") or (len(args) > 1 and args[1] == "poc"):
             raise ValueError("Allowed commands: deploy main|pr-N SHA, destroy pr-N, list")
     ROOT.mkdir(exist_ok=True)
