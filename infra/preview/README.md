@@ -1,55 +1,53 @@
-# Coolify branch previews
+# Coolify previews
 
-Coolify owns checkout, builds, application containers, health checks, HTTPS, logs, and restarts.
-A host-side reconciler polls the public fork every five minutes and connects the external resources Coolify does not provision:
+Coolify handles Git events, builds, native PR previews, containers, health checks, logs, HTTPS, restarts, and preview removal. Main stays deployed. Only trusted PRs are enabled.
 
-- `main` remains available; each open internal PR gets a separate Coolify Compose application.
-- Each application gets its own PlanetScale Postgres development branch and runtime/migration roles.
-- Each preview gets its own staging Auth0 clients, API audience, connection, and test login.
-- Closed PRs lose their Coolify application, PlanetScale branch, and Auth0 resources. Fork PRs never deploy.
-- Two concurrent PR previews are allowed by default. Builds are serialized by Coolify on this 4 CPU / 8 GiB host.
+`compose.yaml` reuses the normal web/RPC Dockerfiles. The RPC Dockerfile exposes its existing dependency stage so the build hook can run Prisma and `pnpm -F @dotkomonline/db apply-fixtures`. There are no preview Dockerfiles or separate fixture dataset. The existing Dotkom fixture user is linked to the shared staging test login.
 
-There are no preview Dockerfiles, separate fixtures, deployment HTTP service, or GitHub deployment secrets.
-`compose.yaml` uses the existing web/RPC Dockerfiles. `build.sh` uses the RPC dependency stage for Prisma and the existing `pnpm -F @dotkomonline/db apply-fixtures` command, only on an empty database. It binds the existing Dotkom fixture member to the preview's Auth0 login. The compatibility stage insertion allows the persistent preview to build older commits too.
+The small custom integration covers PlanetScale, which Coolify does not branch itself:
 
-## Configuration source
+- `database.sh` uses the official `pscale` CLI to ensure one database branch and separate migration/runtime roles per native preview. Credentials stay on the retained disk.
+- `build.sh` runs that hook, migrations, existing fixtures on an empty database, and the normal Compose build. Its preview ID, volume, and URLs come from Coolify's generated Compose configuration.
+- `runtime.mjs` loads that preview's bindings from its own Coolify-managed volume before Node starts. Application containers receive only their own database password. The PlanetScale service token stays in the provisioning helper.
+- A short GitHub workflow deletes the PlanetScale branch when its PR closes. Coolify removes the containers, network, and preview volume. No custom controller, polling timer, deployment API, or per-PR Auth0 provisioning runs.
 
-The private `controller.json` contains provider credentials and an `environment_command` returning a JSON object of string values. Initially it reads private `web.json` / `rpc.json` configuration files exported from the working POC, rather than constructing app environments in Python. Only per-preview resource bindings use `${ORIGIN}`, `${RPC_ORIGIN}`, `${DATABASE_URL}`, `${WEB_CLIENT_ID}`, `${WEB_CLIENT_SECRET}`, `${RPC_CLIENT_ID}`, `${RPC_CLIENT_SECRET}`, `${AUTH0_DOMAIN}`, `${AUTH_SECRET}`, and `${SIGNING_KEY}` placeholders.
+Auth0 clients and the synthetic test account are shared in the existing staging tenant. Each PlanetScale branch has independent fixtures and credentials. Preview Auth0 callbacks are allowed on the preview hostname pattern. Auth0 tokens are intentionally shared within staging; database credentials remain separate.
 
-Coolify stores the rendered application configuration. The migration credential is build-only. PlanetScale/Auth0 provisioning tokens stay outside application builds and containers. Shared keys must agree; only the two conflicting web/RPC Auth0 keys are namespaced in Compose.
+## Configuration
 
-Later, replace `environment_command` with `doppler secrets download --project monoweb-{application} --config <preview-config> --no-file --format json`, supplying its service token to the trusted reconciler. Alternatively use Coolify's native Doppler secret-manager integration and `{{vault.KEY}}` references. No Doppler configuration has been created by this change. Changes to the configuration source require an explicit redeployment of existing applications.
+Coolify receives the existing working configuration through a private standard JSON export, supplied as `environment_json_file` to `coolify/`. Terraform imports it without maintaining another list of app variables in deployment code. Database URLs are excluded: the branch hook supplies those. `NODE_OPTIONS` is runtime-only; test identity bindings are build-only.
 
-The POC baseline uses Turnstile test keys and disables email, Google Workspace, RIF, telemetry, real uploads, and payments. Do not replace it with an unfiltered production export. The application RPC clients still have staging-tenant user-management access; use a dedicated preview Auth0 tenant before expanding access beyond trusted branches.
+Later, supply a Doppler JSON export at the same boundary, or switch the values to Coolify's native Doppler secret references. No Doppler environment has been created. Keep preview configuration synthetic/test-only; email, Google Workspace, uploads, payments, and telemetry remain unconfigured/disabled as in the POC.
 
-## Terraform and recovery
+## Infrastructure and recovery
 
-`terraform/` owns the private network, router, security groups, keypair, 4 CPU / 8 GiB VPS, retained data volume, and the additive Minecraft ingress NIC/forwarders. It references the Minecraft VM and its existing public NIC without managing their lifecycle. The two available floating IPs are already allocated, so HTTP/HTTPS share Minecraft's IP; game ports/services are untouched.
+`terraform/` owns the OpenStack VPS, private network, router, security groups, SSH keypair, retained data volume, and additive ingress NIC/HTTP forwarders. It references the Minecraft VM and its existing public NIC without owning their lifecycle. Its game services and ports are untouched.
 
-Terraform uploads the trusted controller independently of application deployments. Updates to server integration code are applied through Terraform, not executed from a PR. The Coolify installer and release are pinned; auto-updates are disabled. The 40 GiB data volume has `prevent_destroy` and holds Coolify's database, SSH keys, and provisioning state; deleting/replacing the boot VM retains it.
+`bootstrap.sh` mounts the retained disk and uses Coolify's official pinned installer. Coolify's supported Compose override puts its PostgreSQL/Redis data on `/data`; its own keys, configuration, certificates, and branch credentials also survive VPS replacement. The data volume has `prevent_destroy`. Terraform state and bootstrap secrets are kept off the VPS, outside Git.
 
-Keep Terraform state, the OpenStack application credential, SSH private keys, and a private recovery directory **outside Git**. The recovery directory contains `controller.json`, `web.json`, `rpc.json`, `coolify-admin.json`, and optionally `states/*.json`. Never overwrite a newer live state with an older recovery snapshot. The working machine stores these under `~/.config/monoweb-preview/` with restricted permissions.
+`coolify/` declares the application and imported configuration using the community Coolify Terraform provider. Keep its separate state outside Git too. This separation lets infrastructure be recovered before connecting to the Coolify API.
 
 ```sh
 source '/Users/jotjern/Downloads/app-cred-Codex v2-openrc.sh'
 cd infra/preview/terraform
-terraform init -backend-config='path=/private/path/preview.tfstate'
-terraform plan -var-file=/private/path/preview.tfvars
-terraform apply -var-file=/private/path/preview.tfvars
+terraform init -backend-config='path=/private/path/infrastructure.tfstate'
+terraform apply -var-file=/private/path/preview.tfvars.json
+
+cd ../coolify
+terraform init -backend-config='path=/private/path/coolify.tfstate'
+# COOLIFY_ENDPOINT and COOLIFY_TOKEN authenticate the provider.
+terraform apply -var-file=/private/path/coolify.tfvars.json
 ```
 
-See `terraform.tfvars.example`. OpenStack API access requires NTNU network access; an SSH SOCKS proxy through the ingress host also works (`HTTPS_PROXY=socks5h://127.0.0.1:11080`). Existing POC resources were imported into Terraform rather than recreated. Restore the external state file to operate on those resources; do not apply an empty state against the existing deployment.
+The working machine keeps both state files, input files, and recovery credentials under `~/.config/monoweb-preview/`. Existing resources were imported rather than recreated. Restore these state files before applying to the existing infrastructure. OpenStack API access requires NTNU networking; an SSH SOCKS proxy via the ingress host also works.
 
-For a deleted VPS, refresh/plan/apply recreates it, reattaches the retained volume, mounts `/data`, reinstalls the pinned Coolify release if needed, restores the trusted reconciler, and resumes previews. The fixed private address keeps the ingress configuration stable. A retained disk is not an off-site backup: copy `/data/monoweb-previews` and Coolify's normal database backups off the host before intentional storage changes. Initial recovery copies exist locally; external scheduled backup storage remains a follow-up.
+Replacing the VPS reattaches `/data` and reinstalls Coolify with its retained configuration. Coolify can then redeploy the Git applications. Retained storage does not replace an off-site backup: keep Coolify's native database backups off the host before intentional storage changes. Initial recovery snapshots exist locally; scheduled external backup storage is a follow-up.
 
-## Operations
+## Access
 
-- Dashboard: `https://coolify.129.241.100.225.sslip.io` (credentials in the private local credential file).
-- Persistent preview: `https://main.129.241.100.225.sslip.io`.
-- PR preview: `https://pr-N-web.129.241.100.225.sslip.io`; API: `https://pr-N-api.129.241.100.225.sslip.io`.
-- Do not use `pr-N.<ip>.sslip.io`: numeric labels can resolve to a different IP.
-- `journalctl -u monoweb-preview-reconcile.service` shows provisioning; Coolify shows builds and runtime logs.
-- To reconcile now: `sudo systemctl start monoweb-preview-reconcile.service`.
-- Test logins are recorded privately in `/data/monoweb-previews/states/<preview>.json`.
+Dashboard: `https://coolify.129.241.100.225.sslip.io`.
+Main: `https://main.129.241.100.225.sslip.io`.
+Native preview URLs follow Coolify's default template, such as `https://2.main.129.241.100.225.sslip.io` and `https://2.main-api.129.241.100.225.sslip.io`.
+Dashboard credentials and the shared staging test login are stored privately in `~/.config/monoweb-preview/`.
 
-Validation: `python3 -m unittest discover -s infra/preview -p 'test_*.py'`, `sh -n infra/preview/build.sh`, and `terraform -chdir=infra/preview/terraform validate`. Live migration checks cover HTTPS, fixture content, Auth0 login, branch isolation, and Minecraft availability.
+Repository pushes and PR events reach Coolify through its standard signed GitHub repository webhook. The cleanup workflow uses a PlanetScale service token scoped to this preview database. Builds and runtime are visible in Coolify; no deployment credentials are needed by application CI.

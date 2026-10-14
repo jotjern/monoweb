@@ -2,7 +2,7 @@ resource "terraform_data" "bootstrap" {
   triggers_replace = {
     server = openstack_compute_instance_v2.preview.id
     volume = openstack_compute_volume_attach_v2.data.id
-    code   = sha256(join("", [for file in ["bootstrap.py", "previewctl.py", "build.sh", "compose.yaml", "reconcile.service", "reconcile.timer"] : filesha256("${path.module}/../${file}")]))
+    code   = sha256(join("", [for name in ["bootstrap.sh", "build.sh", "database.sh", "runtime.mjs", "coolify-compose.custom.yml"] : filesha256("${path.module}/../${name}")]))
   }
   connection {
     type                = "ssh"
@@ -22,31 +22,27 @@ resource "terraform_data" "bootstrap" {
     destination = "/tmp/monoweb-preview-bootstrap/recovery"
   }
   provisioner "file" {
-    source      = "${path.module}/../bootstrap.py"
-    destination = "/tmp/monoweb-preview-bootstrap/bootstrap.py"
-  }
-  provisioner "file" {
-    source      = "${path.module}/../previewctl.py"
-    destination = "/tmp/monoweb-preview-bootstrap/previewctl.py"
+    source      = "${path.module}/../bootstrap.sh"
+    destination = "/tmp/monoweb-preview-bootstrap/bootstrap.sh"
   }
   provisioner "file" {
     source      = "${path.module}/../build.sh"
     destination = "/tmp/monoweb-preview-bootstrap/build.sh"
   }
   provisioner "file" {
-    source      = "${path.module}/../compose.yaml"
-    destination = "/tmp/monoweb-preview-bootstrap/compose.yaml"
+    source      = "${path.module}/../database.sh"
+    destination = "/tmp/monoweb-preview-bootstrap/database.sh"
   }
   provisioner "file" {
-    source      = "${path.module}/../reconcile.service"
-    destination = "/tmp/monoweb-preview-bootstrap/reconcile.service"
+    source      = "${path.module}/../runtime.mjs"
+    destination = "/tmp/monoweb-preview-bootstrap/runtime.mjs"
   }
   provisioner "file" {
-    source      = "${path.module}/../reconcile.timer"
-    destination = "/tmp/monoweb-preview-bootstrap/reconcile.timer"
+    source      = "${path.module}/../coolify-compose.custom.yml"
+    destination = "/tmp/monoweb-preview-bootstrap/coolify-compose.custom.yml"
   }
   provisioner "remote-exec" {
-    inline = ["set -eu", "sudo python3 /tmp/monoweb-preview-bootstrap/bootstrap.py /tmp/monoweb-preview-bootstrap ${openstack_blockstorage_volume_v3.data.id}"]
+    inline = ["set -eu", "sudo bash /tmp/monoweb-preview-bootstrap/bootstrap.sh /tmp/monoweb-preview-bootstrap ${openstack_blockstorage_volume_v3.data.id}"]
   }
 }
 

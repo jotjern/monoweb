@@ -1,0 +1,23 @@
+name: Remove closed preview database
+on:
+  pull_request_target:
+    types: [closed]
+permissions: {}
+jobs:
+  cleanup:
+    if: github.repository == 'jotjern/monoweb' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: planetscale/setup-pscale-action@b6a50ee45b4b24944e1d8de6e57b3a5f6476a1af # v1
+        with:
+          version: v0.321.0
+      - name: Delete this PR's disposable PlanetScale branch
+        env:
+          PLANETSCALE_SERVICE_TOKEN_ID: ${{ secrets.PREVIEW_PLANETSCALE_TOKEN_ID }}
+          PLANETSCALE_SERVICE_TOKEN: ${{ secrets.PREVIEW_PLANETSCALE_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          branches=$(pscale branch list monoweb-preview-test --org jotjernshaugen --format json)
+          if printf '%s' "$branches" | jq -e --arg name "coolify-pr-$PR_NUMBER" 'any(.[]; .name == $name)' >/dev/null; then
+            pscale branch delete monoweb-preview-test "coolify-pr-$PR_NUMBER" --org jotjernshaugen --force
+          fi
