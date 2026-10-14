@@ -47,15 +47,25 @@ def http(method, url, data=None, token=None):
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(url, method=method, headers=headers,
         data=json.dumps(data).encode() if data is not None else None)
-    try:
-        with urllib.request.urlopen(request, timeout=45) as response:
-            body = response.read()
-            return json.loads(body) if body else None
-    except urllib.error.HTTPError as error:
-        if method == "DELETE" and error.code == 404:
-            return None
-        details = json.loads(error.read() or b"{}")
-        raise RuntimeError(f"{method} {url}: HTTP {error.code}: {details.get('message', details.get('error', 'request failed'))}") from None
+    for attempt in range(8):
+        try:
+            with urllib.request.urlopen(request, timeout=45) as response:
+                body = response.read()
+                return json.loads(body) if body else None
+        except urllib.error.HTTPError as error:
+            if error.code == 429 and attempt < 7:
+                try:
+                    delay = float(error.headers.get("Retry-After", "0"))
+                    if delay <= 0:
+                        delay = float(error.headers.get("X-RateLimit-Reset", "0")) - time.time() + 1
+                except ValueError:
+                    delay = 0
+                time.sleep(min(60, max(2 ** attempt, delay)))
+                continue
+            if method == "DELETE" and error.code == 404:
+                return None
+            details = json.loads(error.read() or b"{}")
+            raise RuntimeError(f"{method} {url}: HTTP {error.code}: {details.get('message', details.get('error', 'request failed'))}") from None
 
 class Controller:
     def __init__(self):
