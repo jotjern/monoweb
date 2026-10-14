@@ -9,7 +9,7 @@ This proof of concept hosts a persistent `main` preview and up to two trusted in
 - Public ingress: `129.241.100.225` on `court-smp-26-3`. Two systemd socket proxies forward TCP 80/443 to the VPS over an additional private interface (`192.168.73.254`). Minecraft still uses 25565 and its original network interface.
 - Caddy on the preview VPS terminates HTTPS and routes hostnames to Docker containers.
 - Main preview: `https://main.129.241.100.225.sslip.io`, API at `https://main-api.129.241.100.225.sslip.io`.
-- PR N: `https://pr-N.129.241.100.225.sslip.io`, API at `https://pr-N-api.129.241.100.225.sslip.io`.
+- PR N: `https://pr-N-web.129.241.100.225.sslip.io`, API at `https://pr-N-api.129.241.100.225.sslip.io`. The `-web` suffix prevents sslip.io from interpreting the numeric PR prefix as part of the IP address.
 - PlanetScale: `jotjernshaugen/monoweb-preview-test`. The main preview uses `preview-main`; PR N uses `pr-N`. The default database branch `main` is not used by the application.
 - Auth0 tenant: `onlineweb-staging.eu.auth0.com`. Preview connections and applications are separately named `Monoweb-Preview-*` / `Monoweb preview *`.
 
@@ -23,7 +23,7 @@ A separate credential-free job runs controller/API boundary tests first. The dep
 
 The API runs as the unprivileged `preview-deploy` account, listening only on the Docker bridge at `172.18.0.1:9090` behind Caddy. That account can invoke exactly `/opt/monoweb-preview/controller/previewctl.py dispatch` through sudo, with `PREVIEW_COMMAND` preserved. The root dispatcher independently validates the operation and arguments. The API receives no PlanetScale or Auth0 provisioning credentials. Its bearer token is stored mode 0600 at `/home/preview-deploy/.config/preview-api-token`; operation logs/status are private under `/home/preview-deploy/.local/state/preview-api/`. The service unit is `deploy-api.service`; install the program root-owned under `/usr/local/lib/monoweb-preview/` and the Caddy route from `deploy-api.caddy.example`.
 
-The host controller serializes operations using a lock, provisions or reuses resources, fetches the exact source commit, builds a tools image, runs Prisma migrations/generation and an idempotent synthetic seed, builds the app images, starts a separate Compose project, waits for health, and reloads Caddy. Docker restart policies recover crashed processes and restart stacks after a host reboot. An hourly systemd timer removes previews for closed PRs if a GitHub cleanup event was missed.
+The host controller serializes operations using a lock, provisions or reuses resources, fetches the exact source commit, builds a tools image, runs Prisma migrations/generation and an idempotent synthetic seed, builds the app images, starts a separate Compose project, waits for container health, reloads Caddy, and checks both public HTTPS endpoints. Docker restart policies recover crashed processes and restart stacks after a host reboot. An hourly systemd timer removes previews for closed PRs if a GitHub cleanup event was missed.
 
 Builds run on the preview VPS for this proof of concept. Application build processes receive no PlanetScale service token or Auth0 provisioning credential. Frontend builds use non-secret placeholders for server configuration; actual server secrets are supplied at container startup. Per-preview public URLs are embedded at build time.
 

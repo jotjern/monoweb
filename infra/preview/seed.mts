@@ -47,7 +47,7 @@ try {
   })
   await db.article.upsert({
     where: { slug: "preview-welcome" },
-    update: {},
+    update: { imageUrl: `${process.env.PREVIEW_ORIGIN}/online-logo.svg` },
     create: {
       slug: "preview-welcome",
       title: `Welcome to the ${previewId} preview`,

@@ -66,5 +66,7 @@ jobs:
             fi
             [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
             python3 infra/preview/deploy_client.py deploy "$preview" "$commit_sha"
-            printf 'Preview: https://%s.%s\n' "$preview" "$PREVIEW_BASE_DOMAIN" >> "$GITHUB_STEP_SUMMARY"
+            label="$preview"
+            if [[ "$preview" != main ]]; then label="$preview-web"; fi
+            printf 'Preview: https://%s.%s\n' "$label" "$PREVIEW_BASE_DOMAIN" >> "$GITHUB_STEP_SUMMARY"
           fi

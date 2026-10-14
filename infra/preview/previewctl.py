@@ -130,14 +130,26 @@ class Controller:
 
     def provision(self, preview):
         path = self.state_path(preview)
+        label = preview if preview == "main" else preview + "-web"
+        origin = f"https://{label}.{self.config['base_domain']}"
         if path.exists():
             state = json.loads(path.read_text())
+            if state["origin"] != origin:
+                settings = {
+                    "callbacks": [origin + "/api/auth/callback/auth0", origin + "/api/auth/link-identity/callback"],
+                    "allowed_logout_urls": [origin, origin + "/innstillinger/bruker"], "web_origins": [origin],
+                }
+                if "web_client" in state:
+                    self.auth("PATCH", "/clients/" + state["web_client"]["client_id"], settings)
+                    state["web_client"].update(settings)
+                state["origin"] = origin
+                private_json(path, state)
         else:
             active = [p for p in self.states.glob("pr-*.json")]
             if preview.startswith("pr-") and len(active) >= self.config.get("max_pr_previews", 2):
                 raise RuntimeError("Preview capacity reached; remove an unused PR preview first")
             state = {"id": preview, "branch": "preview-main" if preview == "main" else preview,
-                "origin": f"https://{preview}.{self.config['base_domain']}",
+                "origin": origin,
                 "rpc_origin": f"https://{preview}-api.{self.config['base_domain']}",
                 "auth_secret": secrets.token_hex(32), "signing_key": secrets.token_hex(32),
                 "status": "provisioning"}
@@ -281,6 +293,18 @@ class Controller:
         run(["docker", "exec", "preview-caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"])
         run(["docker", "exec", "preview-caddy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"])
 
+    def wait_public(self, state):
+        for _ in range(20):
+            try:
+                for url in (state["origin"], state["rpc_origin"] + "/health"):
+                    with urllib.request.urlopen(url, timeout=10) as response:
+                        if response.status != 200:
+                            raise RuntimeError("Preview returned an unexpected HTTP status")
+                return
+            except (OSError, urllib.error.URLError, RuntimeError):
+                time.sleep(2)
+        raise RuntimeError("Public HTTPS readiness check failed")
+
     def deploy(self, preview, sha):
         if not SHA.fullmatch(sha):
             raise ValueError("Deployment requires a full commit SHA")
@@ -319,6 +343,7 @@ class Controller:
             run(["docker", "network", "create", "preview-edge"], capture=True)
         run(["docker", "compose", "-p", "preview-" + preview, "-f", str(stack / "compose.json"), "up", "-d", "--wait", "--wait-timeout", "180", "--remove-orphans"])
         self.route(state)
+        self.wait_public(state)
         state.update(status="running", sha=sha, deployed_at=int(time.time()))
         private_json(path, state)
         print("Preview ready: " + state["origin"], flush=True)
